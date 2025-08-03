@@ -64,7 +64,7 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
       with:
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/arm64,linux/amd64
     
     - name: Log in to Docker Hub
       if: github.event_name != 'pull_request'
@@ -86,26 +86,21 @@ jobs:
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
     
-    - name: Build and push
+    - name: Build for scanning (ARM64 primary)
       uses: docker/build-push-action@v5
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        platforms: linux/arm64
+        load: true
+        tags: ${{ env.IMAGE_NAME }}:scan
         cache-from: type=gha
         cache-to: type=gha,mode=max
-        outputs: type=docker,dest=/tmp/image.tar
-
-    - name: Load Docker image for scanning
-      run: docker load -i /tmp/image.tar
 
     # Security scanning of built image
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ env.IMAGE_NAME }}:latest
+        image-ref: ${{ env.IMAGE_NAME }}:scan
         format: 'sarif'
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
@@ -120,7 +115,7 @@ jobs:
     - name: Run Trivy vulnerability scanner (Table format)
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ env.IMAGE_NAME }}:latest
+        image-ref: ${{ env.IMAGE_NAME }}:scan
         format: 'table'
         severity: 'CRITICAL,HIGH'
 
@@ -129,7 +124,7 @@ jobs:
       if: github.event_name != 'pull_request'
       with:
         command: cves
-        image: ${{ env.IMAGE_NAME }}:latest
+        image: ${{ env.IMAGE_NAME }}:scan
         sarif-file: scout-report.sarif
         summary: true
 
@@ -139,6 +134,17 @@ jobs:
       continue-on-error: true
       with:
         sarif_file: 'scout-report.sarif'
+
+    - name: Build and push (ARM64 primary, multi-platform)
+      uses: docker/build-push-action@v5
+      if: github.event_name != 'pull_request'
+      with:
+        context: .
+        platforms: linux/arm64,linux/amd64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
 
     - name: Update Docker Hub description
       if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
