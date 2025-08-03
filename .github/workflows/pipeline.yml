@@ -18,6 +18,7 @@ env:
 
 jobs:
   security-scan:
+    name: Security Scan & Lint
     runs-on: ubuntu-latest
     
     steps:
@@ -54,6 +55,7 @@ jobs:
         echo "✅ Using official Elasticsearch image"
 
   build:
+    name: Build & Security Test
     runs-on: ubuntu-latest
     needs: security-scan
     
@@ -151,18 +153,35 @@ jobs:
           echo ""
         fi
         
-        # Security gate - currently informational only
+        # Security gate - strict for PRs, informational for pushes
         if [ "$CRITICAL" -gt 0 ]; then
           echo "❌ SECURITY ALERT: $CRITICAL CRITICAL vulnerabilities found!"
-          echo "🚨 Strongly recommend fixing before production use."
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "� BLOCKING PR: Critical vulnerabilities must be fixed before merge"
+            exit 1
+          else
+            echo "�🚨 Strongly recommend fixing before production use."
+          fi
         fi
         
-        if [ "$HIGH" -gt 5 ]; then
-          echo "⚠️  SECURITY WARNING: $HIGH HIGH vulnerabilities found (threshold: 5)"
-          echo "💡 Consider updating base image or fixing vulnerabilities."
+        if [ "$HIGH" -gt 0 ]; then
+          echo "⚠️  SECURITY WARNING: $HIGH HIGH vulnerabilities found"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "🚫 BLOCKING PR: High vulnerabilities must be fixed before merge"
+            echo "💡 Only MEDIUM and LOW severity vulnerabilities are allowed in main branch"
+            exit 1
+          else
+            echo "💡 Consider updating base image or fixing vulnerabilities."
+          fi
         fi
         
-        echo "✅ Build will continue - Security scanning is informational"
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          echo "✅ PR SECURITY GATE PASSED: Only MEDIUM and LOW vulnerabilities found"
+          echo "🔒 Safe to merge to main branch"
+        else
+          echo "✅ Build will continue - Security scanning is informational for pushes"
+        fi
+        
         echo "📊 Download the trivy-security-report artifact for detailed analysis"
 
     - name: Upload Trivy report as artifact
