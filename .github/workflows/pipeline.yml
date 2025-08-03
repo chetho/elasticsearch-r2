@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
 env:
   DOCKER_REGISTRY: docker.io
   IMAGE_NAME: elasticsearch-r2
