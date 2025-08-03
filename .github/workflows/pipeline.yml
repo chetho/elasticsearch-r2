@@ -119,6 +119,59 @@ jobs:
         format: 'table'
         severity: 'CRITICAL,HIGH'
 
+    - name: Run Trivy vulnerability scanner (JSON report)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.IMAGE_NAME }}:scan
+        format: 'json'
+        output: 'trivy-report.json'
+
+    - name: Security Summary
+      if: always()
+      run: |
+        echo "🔍 Security Scan Summary for ARM64 Elasticsearch:"
+        echo "================================================"
+        
+        # Count vulnerabilities by severity
+        CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-report.json 2>/dev/null || echo "0")
+        HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-report.json 2>/dev/null || echo "0")
+        MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-report.json 2>/dev/null || echo "0")
+        LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-report.json 2>/dev/null || echo "0")
+        
+        echo "🔴 CRITICAL: $CRITICAL"
+        echo "🟠 HIGH: $HIGH"
+        echo "🟡 MEDIUM: $MEDIUM"
+        echo "🟢 LOW: $LOW"
+        echo ""
+        
+        # Show top HIGH vulnerabilities
+        if [ "$HIGH" -gt 0 ]; then
+          echo "⚠️  Top HIGH Severity Vulnerabilities:"
+          jq -r '.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH") | "- \(.VulnerabilityID): \(.Title // .Description) (Package: \(.PkgName))"' trivy-report.json 2>/dev/null | head -5
+          echo ""
+        fi
+        
+        # Security gate - currently informational only
+        if [ "$CRITICAL" -gt 0 ]; then
+          echo "❌ SECURITY ALERT: $CRITICAL CRITICAL vulnerabilities found!"
+          echo "🚨 Strongly recommend fixing before production use."
+        fi
+        
+        if [ "$HIGH" -gt 5 ]; then
+          echo "⚠️  SECURITY WARNING: $HIGH HIGH vulnerabilities found (threshold: 5)"
+          echo "💡 Consider updating base image or fixing vulnerabilities."
+        fi
+        
+        echo "✅ Build will continue - Security scanning is informational"
+        echo "📊 Download the trivy-security-report artifact for detailed analysis"
+
+    - name: Upload Trivy report as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: trivy-security-report
+        path: trivy-report.json
+
     - name: Docker Scout CVE scan
       uses: docker/scout-action@v1
       if: github.event_name != 'pull_request'

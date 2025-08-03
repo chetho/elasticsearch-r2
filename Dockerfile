@@ -1,4 +1,4 @@
-FROM docker.elastic.co/elasticsearch/elasticsearch:8.11.3
+FROM docker.elastic.co/elasticsearch/elasticsearch:9.1.0
 
 # Install S3 repository plugin for R2 compatibility
 RUN bin/elasticsearch-plugin install --batch repository-s3
