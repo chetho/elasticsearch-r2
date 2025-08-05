@@ -5,7 +5,7 @@ on:
     branches: [ develop ]
     tags: [ 'v*' ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]
 
 permissions:
   contents: read
