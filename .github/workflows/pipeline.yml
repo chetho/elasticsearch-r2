@@ -226,22 +226,6 @@ jobs:
         name: trivy-security-report
         path: trivy-report.json
 
-    - name: Docker Scout CVE scan
-      uses: docker/scout-action@v1
-      if: github.event_name != 'pull_request'
-      with:
-        command: cves
-        image: ${{ env.IMAGE_NAME }}:scan
-        sarif-file: scout-report.sarif
-        summary: true
-
-    - name: Upload Docker Scout scan results
-      uses: github/codeql-action/upload-sarif@v3
-      if: always() && github.event_name != 'pull_request'
-      continue-on-error: true
-      with:
-        sarif_file: 'scout-report.sarif'
-
     - name: Build and push (ARM64 primary)
       uses: docker/build-push-action@v5
       if: github.event_name != 'pull_request'
