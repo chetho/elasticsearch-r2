@@ -75,6 +75,13 @@ jobs:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
     
+    - name: Extract Elasticsearch version from Dockerfile
+      id: es_version
+      run: |
+        ES_VERSION=$(grep "FROM docker.elastic.co/elasticsearch/elasticsearch:" Dockerfile | sed 's/.*elasticsearch://')
+        echo "elasticsearch_version=$ES_VERSION" >> $GITHUB_OUTPUT
+        echo "📦 Detected Elasticsearch version: $ES_VERSION"
+
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v5
@@ -86,12 +93,15 @@ jobs:
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
           type=semver,pattern={{major}}
+          type=raw,value=${{ steps.es_version.outputs.elasticsearch_version }},enable=true
+          type=raw,value=${{ steps.es_version.outputs.elasticsearch_version }}-{{branch}},enable={{is_default_branch}}
           type=raw,value=latest,enable={{is_default_branch}}
         labels: |
           org.opencontainers.image.title=${{ env.IMAGE_NAME }}
           org.opencontainers.image.description=Elasticsearch with R2 plugin for ARM64/AMD64
-          org.opencontainers.image.version={{version}}
+          org.opencontainers.image.version=${{ steps.es_version.outputs.elasticsearch_version }}
           org.opencontainers.image.vendor=Community
+          elasticsearch.version=${{ steps.es_version.outputs.elasticsearch_version }}
     
     - name: Build for scanning (ARM64 primary)
       uses: docker/build-push-action@v5
