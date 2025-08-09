@@ -73,8 +73,8 @@ jobs:
       if: github.event_name != 'pull_request'
       uses: aws-actions/configure-aws-credentials@v4
       with:
-        #aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        #aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: us-east-1  # ECR Public is only available in us-east-1
 
     - name: Log in to Amazon ECR Public
