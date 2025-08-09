@@ -14,7 +14,7 @@ permissions:
 
 env:
   DOCKER_REGISTRY: public.ecr.aws
-  ECR_REGISTRY_ALIAS: zvw
+  ECR_REGISTRY_ALIAS: ${{ secrets.AWS_ECR_ALIAS }}
   IMAGE_NAME: elastic/elasticsearch-s3
 
 jobs:
