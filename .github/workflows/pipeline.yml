@@ -13,8 +13,9 @@ permissions:
   actions: read
 
 env:
-  DOCKER_REGISTRY: docker.io
-  IMAGE_NAME: elasticsearch-r2
+  DOCKER_REGISTRY: public.ecr.aws
+  ECR_REGISTRY_ALIAS: zvw
+  IMAGE_NAME: elastic/elasticsearch-s3
 
 jobs:
   security-scan:
@@ -68,12 +69,19 @@ jobs:
       with:
         platforms: linux/arm64
     
-    - name: Log in to Docker Hub
+    - name: Configure AWS credentials
       if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
+      uses: aws-actions/configure-aws-credentials@v4
       with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+        #aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        #aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1  # ECR Public is only available in us-east-1
+
+    - name: Log in to Amazon ECR Public
+      if: github.event_name != 'pull_request'
+      uses: aws-actions/amazon-ecr-login@v2
+      with:
+        registry-type: public
     
     - name: Extract Elasticsearch version from Dockerfile
       id: es_version
@@ -86,7 +94,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
+        images: ${{ env.DOCKER_REGISTRY }}/${{ env.ECR_REGISTRY_ALIAS }}/${{ env.IMAGE_NAME }}
         tags: |
           type=ref,event=branch
           type=ref,event=pr
@@ -245,60 +253,44 @@ jobs:
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha
 
-    - name: Update Docker Hub description
+    - name: Update ECR Public repository description
       if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-      uses: peter-evans/dockerhub-description@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
-        repository: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
-        readme-filepath: ./README.md
+      run: |
+        echo "📝 ECR Public repository description update"
+        echo "Note: ECR Public doesn't support automated description updates like Docker Hub"
+        echo "Repository: ${{ env.DOCKER_REGISTRY }}/${{ env.ECR_REGISTRY_ALIAS }}/${{ env.IMAGE_NAME }}"
+        echo "Please manually update the description in the AWS Console if needed"
 
   cleanup:
-    name: Cleanup Docker Hub
+    name: Cleanup ECR Public
     runs-on: ubuntu-latest
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     
     steps:
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v3
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
       with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
     
-    - name: Delete develop branch images
+    - name: Delete develop branch images from ECR Public
       run: |
-        echo "🧹 Cleaning up develop branch images from Docker Hub..."
+        echo "🧹 Cleaning up develop branch images from ECR Public..."
         
         # Get repository name
-        REPO="${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}"
+        REPO_NAME="${{ env.IMAGE_NAME }}"
+        REGISTRY_ALIAS="${{ env.ECR_REGISTRY_ALIAS }}"
         
-        # Function to get auth token for Docker Hub API
-        get_token() {
-          curl -s -H "Content-Type: application/json" \
-            -X POST \
-            -d "{\"username\": \"${{ secrets.DOCKER_USERNAME }}\", \"password\": \"${{ secrets.DOCKER_ACCESS_TOKEN }}\"}" \
-            https://hub.docker.com/v2/users/login/ | jq -r .token
-        }
+        echo "📋 Fetching develop tags for repository: $REGISTRY_ALIAS/$REPO_NAME"
         
-        # Get authentication token
-        TOKEN=$(get_token)
-        
-        if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-          echo "❌ Failed to authenticate with Docker Hub API"
-          exit 1
-        fi
-        
-        echo "✅ Successfully authenticated with Docker Hub"
-        
-        # Get all tags for the repository
-        echo "📋 Fetching all tags for repository: $REPO"
-        TAGS_RESPONSE=$(curl -s -H "Authorization: JWT $TOKEN" \
-          "https://hub.docker.com/v2/repositories/$REPO/tags/?page_size=100")
-        
-        # Extract develop-related tags (tags that start with 'develop')
-        DEVELOP_TAGS=$(echo "$TAGS_RESPONSE" | jq -r '.results[]? | select(.name | startswith("develop")) | .name')
+        # List all images and filter for develop tags
+        DEVELOP_TAGS=$(aws ecr-public describe-images \
+          --registry-id alias/$REGISTRY_ALIAS \
+          --repository-name $REPO_NAME \
+          --query 'imageDetails[?contains(imageTags, `develop`)].imageTags[]' \
+          --output text 2>/dev/null | grep -E '^develop' || echo "")
         
         if [ -z "$DEVELOP_TAGS" ]; then
           echo "✅ No develop branch images found to delete"
@@ -316,16 +308,28 @@ jobs:
         for tag in $DEVELOP_TAGS; do
           echo "🗑️  Deleting tag: $tag"
           
-          DELETE_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: JWT $TOKEN" \
-            -X DELETE \
-            "https://hub.docker.com/v2/repositories/$REPO/tags/$tag/")
+          # Get image digest for the tag
+          IMAGE_DIGEST=$(aws ecr-public describe-images \
+            --registry-id alias/$REGISTRY_ALIAS \
+            --repository-name $REPO_NAME \
+            --image-ids imageTag=$tag \
+            --query 'imageDetails[0].imageDigest' \
+            --output text 2>/dev/null)
           
-          if [ "$DELETE_RESPONSE" = "204" ]; then
-            echo "✅ Successfully deleted: $tag"
-            ((DELETED_COUNT++))
+          if [ "$IMAGE_DIGEST" != "None" ] && [ -n "$IMAGE_DIGEST" ]; then
+            # Delete by digest to avoid issues with multiple tags on same image
+            if aws ecr-public batch-delete-image \
+              --registry-id alias/$REGISTRY_ALIAS \
+              --repository-name $REPO_NAME \
+              --image-ids imageDigest=$IMAGE_DIGEST >/dev/null 2>&1; then
+              echo "✅ Successfully deleted: $tag"
+              ((DELETED_COUNT++))
+            else
+              echo "❌ Failed to delete: $tag"
+              ((FAILED_COUNT++))
+            fi
           else
-            echo "❌ Failed to delete: $tag (HTTP $DELETE_RESPONSE)"
+            echo "❌ Could not find digest for: $tag"
             ((FAILED_COUNT++))
           fi
         done
@@ -337,7 +341,7 @@ jobs:
         echo "❌ Failed to delete: $FAILED_COUNT images"
         
         if [ $FAILED_COUNT -gt 0 ]; then
-          echo "⚠️  Some deletions failed - check Docker Hub permissions"
+          echo "⚠️  Some deletions failed - check ECR permissions"
           exit 1
         fi
         
@@ -346,13 +350,13 @@ jobs:
     - name: Cleanup summary
       if: always()
       run: |
-        echo "📊 Docker Hub Cleanup Complete"
-        echo "==============================="
-        echo "Repository: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}"
+        echo "📊 ECR Public Cleanup Complete"
+        echo "=============================="
+        echo "Repository: ${{ env.DOCKER_REGISTRY }}/${{ env.ECR_REGISTRY_ALIAS }}/${{ env.IMAGE_NAME }}"
         echo "Trigger: Push to main branch (typically after PR merge)"
         echo "Action: Removed all 'develop' prefixed tags to keep registry clean"
         echo ""
         echo "💡 Remaining images should only be:"
         echo "   - latest (main branch)"
         echo "   - version tags (v1.0.0, etc.)"
-        echo "   - main branch specific tags"
+        echo "   - Elasticsearch version tags (9.1.1, etc.)"
